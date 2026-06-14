@@ -1,0 +1,20 @@
+services:
+  lens-mcp:
+    build: .
+    expose:
+      - "8788"
+    volumes:
+      - .:/app
+      - /app/.venv
+    env_file:
+      - .env
+    command: ["uv", "run", "watchfiles", "python app/server.py", "/app"]
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN}
+    env_file:
+      - .env
+    depends_on:
+      - lens-mcp
+    restart: unless-stopped
