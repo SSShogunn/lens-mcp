@@ -6,6 +6,7 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen
+RUN uv run playwright install firefox chromium
 
 COPY . .
 

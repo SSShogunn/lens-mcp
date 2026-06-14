@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import signal
 import time
 from contextlib import asynccontextmanager
@@ -7,8 +8,11 @@ from contextlib import asynccontextmanager
 import html2text
 import httpx
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.utilities.types import Image
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
@@ -20,6 +24,8 @@ DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/126.0.0.0 Safari/537.36"
 )
+
+HTTP2_ERROR_MARKERS = ("ERR_HTTP2_PROTOCOL_ERROR", "ERR_HTTP2", "ERR_CONNECTION_RESET")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("lens")
@@ -78,6 +84,71 @@ def _image_format_from_content_type(content_type: str) -> str:
     return fmt or "png"
 
 
+def _is_http2_error(exc: Exception) -> bool:
+    message = str(exc)
+    return any(marker in message for marker in HTTP2_ERROR_MARKERS)
+
+
+def _concise_error(exc: Exception) -> str:
+    text = str(exc)
+    match = re.search(r"net::ERR_[A-Z0-9_]+", text)
+    if match:
+        return match.group(0)
+    if isinstance(exc, PlaywrightTimeoutError):
+        return "navigation timed out"
+    first_line = next((line for line in text.splitlines() if line.strip()), "")
+    return (first_line.strip() or exc.__class__.__name__)[:200]
+
+
+@asynccontextmanager
+async def _navigated_page(url: str, timeout_ms: int, engine: str):
+    async with async_playwright() as p:
+        browser = await getattr(p, engine).launch(headless=True)
+        try:
+            page = await browser.new_page(
+                user_agent=DEFAULT_USER_AGENT,
+                viewport={"width": 1280, "height": 800},
+            )
+            try:
+                await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            except PlaywrightTimeoutError:
+                logger.info(
+                    "networkidle timed out for %s on %s; using current page state",
+                    url, engine,
+                )
+            yield page
+        finally:
+            await browser.close()
+
+
+async def _goto_and_extract(
+    url: str, wait_for_selector: str | None, timeout_ms: int, engine: str
+) -> tuple[str, str]:
+    async with _navigated_page(url, timeout_ms, engine) as page:
+        if wait_for_selector:
+            await page.wait_for_selector(wait_for_selector, timeout=timeout_ms)
+        return await page.content(), await page.title()
+
+
+async def _goto_and_screenshot(
+    url: str, full_page: bool, timeout_ms: int, engine: str
+) -> bytes:
+    async with _navigated_page(url, timeout_ms, engine) as page:
+        return await page.screenshot(full_page=full_page, type="png")
+
+
+async def _with_engine_fallback(run):
+    try:
+        return await run("chromium")
+    except PlaywrightError as exc:
+        if not _is_http2_error(exc):
+            raise
+        logger.info(
+            "Chromium navigation failed (%s); retrying with Firefox", _concise_error(exc)
+        )
+        return await run("firefox")
+
+
 @mcp.tool
 async def fetch_page(
     url: str,
@@ -85,18 +156,12 @@ async def fetch_page(
     timeout_ms: int = 15000,
 ) -> str:
     """Fetch a web page with a headless browser and return its content as markdown."""
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        try:
-            page = await browser.new_page(user_agent=DEFAULT_USER_AGENT)
-            await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
-            if wait_for_selector:
-                await page.wait_for_selector(wait_for_selector, timeout=timeout_ms)
-
-            html = await page.content()
-            title = await page.title()
-        finally:
-            await browser.close()
+    try:
+        html, title = await _with_engine_fallback(
+            lambda engine: _goto_and_extract(url, wait_for_selector, timeout_ms, engine)
+        )
+    except PlaywrightError as exc:
+        raise ToolError(f"Failed to load {url}: {_concise_error(exc)}")
 
     converter = html2text.HTML2Text()
     converter.body_width = 0
@@ -114,17 +179,12 @@ async def screenshot_page(
     timeout_ms: int = 15000,
 ) -> Image:
     """Capture a PNG screenshot of a web page in a 1280x800 viewport."""
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        try:
-            page = await browser.new_page(
-                user_agent=DEFAULT_USER_AGENT,
-                viewport={"width": 1280, "height": 800},
-            )
-            await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
-            data = await page.screenshot(full_page=full_page, type="png")
-        finally:
-            await browser.close()
+    try:
+        data = await _with_engine_fallback(
+            lambda engine: _goto_and_screenshot(url, full_page, timeout_ms, engine)
+        )
+    except PlaywrightError as exc:
+        raise ToolError(f"Failed to load {url}: {_concise_error(exc)}")
 
     return Image(data=data, format="png")
 
