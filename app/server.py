@@ -4,6 +4,7 @@ import re
 import signal
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import html2text
 import httpx
@@ -14,10 +15,13 @@ from fastmcp.utilities.types import Image
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
+from mcp.types import Icon
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
 import db
+
+ICON_PATH = Path(__file__).parent / "icons" / "logo.svg"
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -62,8 +66,18 @@ class RequestLoggingMiddleware(Middleware):
         return result
 
 
-mcp = FastMCP("Lens", lifespan=lifespan)
+mcp = FastMCP(
+    "Lens",
+    lifespan=lifespan,
+    icons=[Icon(src="https://lens.sshogunn.org/icon.svg", mimeType="image/svg+xml")],
+)
 mcp.add_middleware(RequestLoggingMiddleware())
+
+
+@mcp.custom_route("/icon.svg", methods=["GET"])
+async def serve_app_icon(request: Request) -> Response:
+    return Response(ICON_PATH.read_bytes(), media_type="image/svg+xml")
+
 
 
 @mcp.custom_route("/get", methods=["GET"])
