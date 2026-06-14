@@ -80,12 +80,15 @@ async def serve_app_icon(request: Request) -> Response:
 
 
 
-@mcp.custom_route("/get", methods=["GET"])
-async def get_redirect(request: Request) -> Response:
+async def _redirect(request: Request) -> Response:
     target = os.environ.get("LENS_REDIRECT_URL")
     if not target:
         return Response("Not Found", status_code=404)
     return RedirectResponse(target)
+
+
+mcp.custom_route("/", methods=["GET"])(_redirect)
+mcp.custom_route("/{path:path}", methods=["GET"])(_redirect)
 
 
 def _image_format_from_content_type(content_type: str) -> str:
