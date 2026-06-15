@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -194,6 +195,34 @@ async def fetch_page(
         markdown = _to_markdown(html)
 
     return f"# {title}\n\nSource: {url}\n\n{markdown}"
+
+
+@mcp.tool
+async def fetch_pages(
+    urls: list[str],
+    wait_for_selector: str | None = None,
+    timeout_ms: int = 15000,
+    readability: bool = False,
+) -> str:
+    """Fetch multiple web pages concurrently and return all results as markdown, separated by ---."""
+
+    async def _one(url: str) -> str:
+        try:
+            html, title = await _with_engine_fallback(
+                lambda engine: _goto_and_extract(url, wait_for_selector, timeout_ms, engine)
+            )
+            if readability:
+                extracted = trafilatura.extract(html, url=url, output_format="markdown", include_links=True, include_images=True, favor_recall=True)
+                markdown = extracted or _to_markdown(html)
+            else:
+                markdown = _to_markdown(html)
+            return f"# {title}\n\nSource: {url}\n\n{markdown}"
+        except Exception as exc:
+            reason = _concise_error(exc) if isinstance(exc, PlaywrightError) else str(exc)
+            return f"Source: {url}\n\nError: {reason}"
+
+    results = await asyncio.gather(*[_one(url) for url in urls])
+    return "\n\n---\n\n".join(results)
 
 
 @mcp.tool
