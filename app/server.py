@@ -15,11 +15,11 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.utilities.types import Image
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-from playwright.async_api import async_playwright
 from mcp.types import Icon
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
+import browser_pool
 import db
 
 ICON_PATH = Path(__file__).parent / "icons" / "logo.svg"
@@ -38,11 +38,13 @@ logger = logging.getLogger("lens")
 
 @asynccontextmanager
 async def lifespan(server: "FastMCP"):
+    await browser_pool.start()
     await db.start()
     try:
         yield {}
     finally:
         await db.stop()
+        await browser_pool.stop()
 
 
 class RequestLoggingMiddleware(Middleware):
@@ -89,7 +91,6 @@ async def _redirect(request: Request) -> Response:
 
 
 mcp.custom_route("/", methods=["GET"])(_redirect)
-mcp.custom_route("/{path:path}", methods=["GET"])(_redirect)
 
 
 def _image_format_from_content_type(content_type: str) -> str:
@@ -120,23 +121,12 @@ def _concise_error(exc: Exception) -> str:
 
 @asynccontextmanager
 async def _navigated_page(url: str, timeout_ms: int, engine: str):
-    async with async_playwright() as p:
-        browser = await getattr(p, engine).launch(headless=True)
+    async with browser_pool.page(engine) as page:
         try:
-            page = await browser.new_page(
-                user_agent=DEFAULT_USER_AGENT,
-                viewport={"width": 1280, "height": 800},
-            )
-            try:
-                await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
-            except PlaywrightTimeoutError:
-                logger.info(
-                    "networkidle timed out for %s on %s; using current page state",
-                    url, engine,
-                )
-            yield page
-        finally:
-            await browser.close()
+            await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+        except PlaywrightTimeoutError:
+            logger.info("networkidle timed out for %s on %s; using current page state", url, engine)
+        yield page
 
 
 async def _goto_and_extract(
