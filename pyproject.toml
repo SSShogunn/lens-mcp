@@ -11,6 +11,7 @@ dependencies = [
     "html2text>=2025.4.15",
     "httpx>=0.28.1",
     "playwright>=1.60.0",
+    "trafilatura>=2.1.0",
 ]
 
 [project.urls]

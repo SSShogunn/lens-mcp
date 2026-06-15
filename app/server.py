@@ -8,6 +8,7 @@ from pathlib import Path
 
 import html2text
 import httpx
+import trafilatura
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware, MiddlewareContext
@@ -166,13 +167,22 @@ async def _with_engine_fallback(run):
         return await run("firefox")
 
 
+def _to_markdown(html: str) -> str:
+    converter = html2text.HTML2Text()
+    converter.body_width = 0
+    converter.ignore_links = False
+    converter.ignore_images = False
+    return converter.handle(html)
+
+
 @mcp.tool
 async def fetch_page(
     url: str,
     wait_for_selector: str | None = None,
     timeout_ms: int = 15000,
+    readability: bool = False,
 ) -> str:
-    """Fetch a web page with a headless browser and return its content as markdown."""
+    """Fetch a web page with a headless browser and return its content as markdown. Set readability=True to strip nav/sidebars and return only the main content."""
     try:
         html, title = await _with_engine_fallback(
             lambda engine: _goto_and_extract(url, wait_for_selector, timeout_ms, engine)
@@ -180,11 +190,18 @@ async def fetch_page(
     except PlaywrightError as exc:
         raise ToolError(f"Failed to load {url}: {_concise_error(exc)}")
 
-    converter = html2text.HTML2Text()
-    converter.body_width = 0
-    converter.ignore_links = False
-    converter.ignore_images = False
-    markdown = converter.handle(html)
+    if readability:
+        extracted = trafilatura.extract(
+            html,
+            url=url,
+            output_format="markdown",
+            include_links=True,
+            include_images=True,
+            favor_recall=True,
+        )
+        markdown = extracted or _to_markdown(html)
+    else:
+        markdown = _to_markdown(html)
 
     return f"# {title}\n\nSource: {url}\n\n{markdown}"
 
