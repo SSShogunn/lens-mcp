@@ -9,8 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
-# Lens request log database
-*.db
+# Lens databases (request log + memory store)
+data/
 
 # Local secrets / environment
 .env

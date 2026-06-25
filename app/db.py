@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger("lens.db")
 
-DB_PATH = os.environ.get("LENS_DB_PATH", "lens.db")
+DB_PATH = os.environ.get("LENS_DB_PATH", "data/lens.db")
 MAX_FIELD_CHARS = 8000
 
 _queue: asyncio.Queue | None = None
@@ -44,7 +44,8 @@ def _insert(conn: sqlite3.Connection, record: tuple) -> None:
 
 async def _run_worker() -> None:
     assert _queue is not None
-    conn = await asyncio.to_thread(sqlite3.connect, DB_PATH)
+    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    conn = await asyncio.to_thread(sqlite3.connect, DB_PATH, check_same_thread=False)
     try:
         await asyncio.to_thread(_init_db, conn)
         while True:

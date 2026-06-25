@@ -22,6 +22,7 @@ from starlette.responses import RedirectResponse, Response
 
 import browser_pool
 import db
+import memory
 
 ICON_PATH = Path(__file__).parent / "icons" / "logo.svg"
 
@@ -41,9 +42,11 @@ logger = logging.getLogger("lens")
 async def lifespan(server: "FastMCP"):
     await browser_pool.start()
     await db.start()
+    await memory.start()
     try:
         yield {}
     finally:
+        await memory.stop()
         await db.stop()
         await browser_pool.stop()
 
@@ -257,6 +260,53 @@ async def fetch_image(image_url: str, referer: str | None = None) -> Image:
     fmt = _image_format_from_content_type(content_type)
 
     return Image(data=response.content, format=fmt)
+
+
+@mcp.tool
+async def memory_save(name: str, type: str, description: str, content: str) -> str:
+    """Save or update a persistent memory entry (e.g. facts about the user, their preferences, or ongoing project context) so it can be recalled later across sessions via memory_search. `name` is a unique slug — saving again with the same name overwrites the existing entry. `type` categorizes the entry (e.g. user, preference, project, reference)."""
+    try:
+        record = await memory.save(name, type, description, content)
+    except httpx.HTTPError as exc:
+        raise ToolError(f"Failed to save memory: embedding request failed ({exc})")
+    return f"Saved memory '{record['name']}' (type={record['type']})."
+
+
+@mcp.tool
+async def memory_search(query: str, top_k: int = 5, type: str | None = None) -> str:
+    """Semantically search saved memory entries and return the most relevant ones with their full content. Optionally filter by `type`."""
+    try:
+        results = await memory.search(query, top_k=top_k, type=type)
+    except httpx.HTTPError as exc:
+        raise ToolError(f"Failed to search memory: embedding request failed ({exc})")
+    if not results:
+        return "No memory entries found."
+    blocks = [
+        f"## {r['name']} (type={r['type']}, score={r['score']:.3f})\n{r['description']}\n\n{r['content']}"
+        for r in results
+    ]
+    return "\n\n---\n\n".join(blocks)
+
+
+@mcp.tool
+async def memory_list(type: str | None = None) -> str:
+    """List all saved memory entries (name, type, description, last updated) without their full content. Optionally filter by `type`."""
+    entries = await memory.list_entries(type=type)
+    if not entries:
+        return "No memory entries found."
+    return "\n".join(
+        f"- {e['name']} [{e['type']}]: {e['description']} (updated {e['updated_at']})"
+        for e in entries
+    )
+
+
+@mcp.tool
+async def memory_delete(name: str) -> str:
+    """Delete a saved memory entry by name."""
+    deleted = await memory.delete(name)
+    if not deleted:
+        raise ToolError(f"No memory entry named '{name}' found.")
+    return f"Deleted memory '{name}'."
 
 
 def _install_signal_handlers() -> None:
