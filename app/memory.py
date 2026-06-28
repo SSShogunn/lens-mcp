@@ -21,15 +21,24 @@ def _init_db(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS memory (
-            name TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            owner TEXT NOT NULL DEFAULT '',
             type TEXT NOT NULL,
             description TEXT NOT NULL,
             content TEXT NOT NULL,
             embedding BLOB,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (owner, name)
         )
         """
+    )
+    # Migrate pre-multi-tenant databases (no owner column yet).
+    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(memory)")}
+    if "owner" not in existing_columns:
+        conn.execute("ALTER TABLE memory ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_owner_name ON memory(owner, name)"
     )
     conn.commit()
 
@@ -37,6 +46,7 @@ def _init_db(conn: sqlite3.Connection) -> None:
 def _upsert(
     conn: sqlite3.Connection,
     name: str,
+    owner: str,
     type_: str,
     description: str,
     content: str,
@@ -45,48 +55,54 @@ def _upsert(
 ) -> None:
     conn.execute(
         """
-        INSERT INTO memory (name, type, description, content, embedding, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(name) DO UPDATE SET
+        INSERT INTO memory (name, owner, type, description, content, embedding, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(owner, name) DO UPDATE SET
             type = excluded.type,
             description = excluded.description,
             content = excluded.content,
             embedding = excluded.embedding,
             updated_at = excluded.updated_at
         """,
-        (name, type_, description, content, embedding_blob, now, now),
+        (name, owner, type_, description, content, embedding_blob, now, now),
     )
     conn.commit()
 
 
-def _fetch_all(conn: sqlite3.Connection, type_: str | None) -> list[tuple]:
+def _fetch_all(conn: sqlite3.Connection, owner: str, type_: str | None) -> list[tuple]:
     if type_:
         cur = conn.execute(
-            "SELECT name, type, description, content, embedding, updated_at FROM memory WHERE type = ?",
-            (type_,),
+            "SELECT name, type, description, content, embedding, updated_at "
+            "FROM memory WHERE owner = ? AND type = ?",
+            (owner, type_),
         )
     else:
         cur = conn.execute(
-            "SELECT name, type, description, content, embedding, updated_at FROM memory"
+            "SELECT name, type, description, content, embedding, updated_at "
+            "FROM memory WHERE owner = ?",
+            (owner,),
         )
     return cur.fetchall()
 
 
-def _list(conn: sqlite3.Connection, type_: str | None) -> list[tuple]:
+def _list(conn: sqlite3.Connection, owner: str, type_: str | None) -> list[tuple]:
     if type_:
         cur = conn.execute(
-            "SELECT name, type, description, updated_at FROM memory WHERE type = ? ORDER BY updated_at DESC",
-            (type_,),
+            "SELECT name, type, description, updated_at FROM memory "
+            "WHERE owner = ? AND type = ? ORDER BY updated_at DESC",
+            (owner, type_),
         )
     else:
         cur = conn.execute(
-            "SELECT name, type, description, updated_at FROM memory ORDER BY updated_at DESC"
+            "SELECT name, type, description, updated_at FROM memory "
+            "WHERE owner = ? ORDER BY updated_at DESC",
+            (owner,),
         )
     return cur.fetchall()
 
 
-def _delete(conn: sqlite3.Connection, name: str) -> bool:
-    cur = conn.execute("DELETE FROM memory WHERE name = ?", (name,))
+def _delete(conn: sqlite3.Connection, owner: str, name: str) -> bool:
+    cur = conn.execute("DELETE FROM memory WHERE owner = ? AND name = ?", (owner, name))
     conn.commit()
     return cur.rowcount > 0
 
@@ -112,21 +128,21 @@ async def _embed(text: str) -> list[float]:
     return await asyncio.to_thread(_fastembed_embed, text)
 
 
-async def save(name: str, type: str, description: str, content: str) -> dict:
+async def save(name: str, type: str, description: str, content: str, owner: str = "") -> dict:
     embedding = await _embed(f"{description}\n\n{content}")
     blob = array("f", embedding).tobytes()
     now = datetime.now(timezone.utc).isoformat()
     assert _conn is not None
     async with _lock:
-        await asyncio.to_thread(_upsert, _conn, name, type, description, content, blob, now)
+        await asyncio.to_thread(_upsert, _conn, name, owner, type, description, content, blob, now)
     return {"name": name, "type": type, "description": description, "updated_at": now}
 
 
-async def search(query: str, top_k: int = 5, type: str | None = None) -> list[dict]:
+async def search(query: str, top_k: int = 5, type: str | None = None, owner: str = "") -> list[dict]:
     query_embedding = await _embed(query)
     assert _conn is not None
     async with _lock:
-        rows = await asyncio.to_thread(_fetch_all, _conn, type)
+        rows = await asyncio.to_thread(_fetch_all, _conn, owner, type)
 
     scored = []
     for name, type_, description, content, blob, updated_at in rows:
@@ -149,20 +165,20 @@ async def search(query: str, top_k: int = 5, type: str | None = None) -> list[di
     return scored[:top_k]
 
 
-async def list_entries(type: str | None = None) -> list[dict]:
+async def list_entries(type: str | None = None, owner: str = "") -> list[dict]:
     assert _conn is not None
     async with _lock:
-        rows = await asyncio.to_thread(_list, _conn, type)
+        rows = await asyncio.to_thread(_list, _conn, owner, type)
     return [
         {"name": name, "type": type_, "description": description, "updated_at": updated_at}
         for name, type_, description, updated_at in rows
     ]
 
 
-async def delete(name: str) -> bool:
+async def delete(name: str, owner: str = "") -> bool:
     assert _conn is not None
     async with _lock:
-        return await asyncio.to_thread(_delete, _conn, name)
+        return await asyncio.to_thread(_delete, _conn, owner, name)
 
 
 async def start() -> None:

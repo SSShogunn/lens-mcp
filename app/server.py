@@ -20,6 +20,7 @@ from mcp.types import Icon
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
+import auth
 import browser_pool
 import db
 import memory
@@ -77,6 +78,7 @@ mcp = FastMCP(
     "Lens",
     lifespan=lifespan,
     icons=[Icon(src="https://lens.sshogunn.org/icon.svg", mimeType="image/svg+xml")],
+    auth=auth.build_verifier(),
 )
 mcp.add_middleware(RequestLoggingMiddleware())
 
@@ -265,14 +267,16 @@ async def fetch_image(image_url: str, referer: str | None = None) -> Image:
 @mcp.tool
 async def memory_save(name: str, type: str, description: str, content: str) -> str:
     """Save or update a persistent memory entry (e.g. facts about the user, their preferences, or ongoing project context) so it can be recalled later across sessions via memory_search. `name` is a unique slug — saving again with the same name overwrites the existing entry. `type` categorizes the entry (e.g. user, preference, project, reference)."""
-    record = await memory.save(name, type, description, content)
+    owner = auth.current_owner() or ""
+    record = await memory.save(name, type, description, content, owner=owner)
     return f"Saved memory '{record['name']}' (type={record['type']})."
 
 
 @mcp.tool
 async def memory_search(query: str, top_k: int = 5, type: str | None = None) -> str:
     """Semantically search saved memory entries and return the most relevant ones with their full content. Optionally filter by `type`."""
-    results = await memory.search(query, top_k=top_k, type=type)
+    owner = auth.current_owner() or ""
+    results = await memory.search(query, top_k=top_k, type=type, owner=owner)
     if not results:
         return "No memory entries found."
     blocks = [
@@ -285,7 +289,8 @@ async def memory_search(query: str, top_k: int = 5, type: str | None = None) -> 
 @mcp.tool
 async def memory_list(type: str | None = None) -> str:
     """List all saved memory entries (name, type, description, last updated) without their full content. Optionally filter by `type`."""
-    entries = await memory.list_entries(type=type)
+    owner = auth.current_owner() or ""
+    entries = await memory.list_entries(type=type, owner=owner)
     if not entries:
         return "No memory entries found."
     return "\n".join(
@@ -297,7 +302,8 @@ async def memory_list(type: str | None = None) -> str:
 @mcp.tool
 async def memory_delete(name: str) -> str:
     """Delete a saved memory entry by name."""
-    deleted = await memory.delete(name)
+    owner = auth.current_owner() or ""
+    deleted = await memory.delete(name, owner=owner)
     if not deleted:
         raise ToolError(f"No memory entry named '{name}' found.")
     return f"Deleted memory '{name}'."

@@ -29,6 +29,7 @@ A [FastMCP](https://github.com/jlowin/fastmcp) server that gives an MCP client b
 | `LENS_DB_PATH` | `data/lens.db` | Path to the SQLite request log database. |
 | `LENS_MEMORY_DB_PATH` | `data/memory.db` | Path to the SQLite memory store database. |
 | `LENS_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | [fastembed](https://github.com/qdrant/fastembed) model used to embed memory entries locally (no external service needed). |
+| `LENS_AUTH_TOKENS` | _(unset)_ | Comma-separated `user:token` pairs (e.g. `alice:abc123,bob:def456`). If unset, auth is disabled — fine for a private, single-user local instance. **Set this before exposing the server publicly** (e.g. via a tunnel). |
 
 ## Running locally
 
@@ -62,7 +63,13 @@ Every tool call is logged to a SQLite database (`data/lens.db` by default) via a
 
 ## Memory
 
-`memory_save`/`memory_search`/`memory_list`/`memory_delete` give an MCP client a persistent, semantically searchable memory store backed by SQLite (`data/memory.db` by default). Each entry has a unique `name`, a `type` (e.g. `user`, `preference`, `project`, `reference`), a short `description`, and full `content`; `memory_save` embeds `description + content` locally via fastembed and stores the vector alongside the row. `memory_search` embeds the query and ranks entries by cosine similarity. Because this is a single shared server, any MCP client connected to it (Claude web, Claude Code, etc.) reads and writes the same memory.
+`memory_save`/`memory_search`/`memory_list`/`memory_delete` give an MCP client a persistent, semantically searchable memory store backed by SQLite (`data/memory.db` by default). Each entry has a unique `name` (per owner), a `type` (e.g. `user`, `preference`, `project`, `reference`), a short `description`, and full `content`; `memory_save` embeds `description + content` locally via fastembed and stores the vector alongside the row. `memory_search` embeds the query and ranks entries by cosine similarity. Because this is a single shared server, any MCP client connected to it (Claude web, Claude Code, etc.) reads and writes the same memory.
+
+### Multi-user / shared instance
+
+If `LENS_AUTH_TOKENS` is set, every memory entry is scoped to the `user` identified by the caller's bearer token — each user only ever sees and modifies their own entries, even though they're all stored in the same `data/memory.db`. Adding a new user is just adding another `user:token` pair to `LENS_AUTH_TOKENS` and giving them their token; no other setup needed. Running with `LENS_AUTH_TOKENS` unset keeps the server single-user with auth disabled, which is the right default for a private local self-hosted instance.
+
+**Upgrading an existing single-user database**: pre-multi-tenant memory entries are kept (assigned to the default/no-auth owner) and remain readable once you set `LENS_AUTH_TOKENS`, as long as you keep using the server without a token (or treat that data as belonging to whichever single user you were before). Entry names stay globally unique within a `data/memory.db` created before this feature shipped — recreate the database if you need strict per-user name isolation from a clean slate.
 
 ## Resilient navigation
 
