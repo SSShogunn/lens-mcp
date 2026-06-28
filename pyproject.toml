@@ -7,6 +7,7 @@ requires-python = ">=3.14"
 keywords = ["mcp", "playwright", "browser", "web-scraping", "screenshot", "fastmcp", "llm-tools"]
 
 dependencies = [
+    "fastembed>=0.8.0",
     "fastmcp>=3.4.2",
     "html2text>=2025.4.15",
     "httpx>=0.28.1",

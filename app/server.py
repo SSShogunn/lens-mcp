@@ -265,20 +265,14 @@ async def fetch_image(image_url: str, referer: str | None = None) -> Image:
 @mcp.tool
 async def memory_save(name: str, type: str, description: str, content: str) -> str:
     """Save or update a persistent memory entry (e.g. facts about the user, their preferences, or ongoing project context) so it can be recalled later across sessions via memory_search. `name` is a unique slug — saving again with the same name overwrites the existing entry. `type` categorizes the entry (e.g. user, preference, project, reference)."""
-    try:
-        record = await memory.save(name, type, description, content)
-    except httpx.HTTPError as exc:
-        raise ToolError(f"Failed to save memory: embedding request failed ({exc})")
+    record = await memory.save(name, type, description, content)
     return f"Saved memory '{record['name']}' (type={record['type']})."
 
 
 @mcp.tool
 async def memory_search(query: str, top_k: int = 5, type: str | None = None) -> str:
     """Semantically search saved memory entries and return the most relevant ones with their full content. Optionally filter by `type`."""
-    try:
-        results = await memory.search(query, top_k=top_k, type=type)
-    except httpx.HTTPError as exc:
-        raise ToolError(f"Failed to search memory: embedding request failed ({exc})")
+    results = await memory.search(query, top_k=top_k, type=type)
     if not results:
         return "No memory entries found."
     blocks = [

@@ -6,14 +6,12 @@ import sqlite3
 from array import array
 from datetime import datetime, timezone
 
-import httpx
-
 logger = logging.getLogger("lens.memory")
 
 DB_PATH = os.environ.get("LENS_MEMORY_DB_PATH", "data/memory.db")
-EMBEDDING_BASE_URL = os.environ.get("LENS_EMBEDDING_BASE_URL", "http://localhost:1234/v1")
-EMBEDDING_API_KEY = os.environ.get("LENS_EMBEDDING_API_KEY", "lm-studio")
-EMBEDDING_MODEL = os.environ.get("LENS_EMBEDDING_MODEL", "text-embedding-nomic-embed-text-v1.5")
+EMBEDDING_MODEL = os.environ.get("LENS_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+
+_fastembed_model = None
 
 _conn: sqlite3.Connection | None = None
 _lock = asyncio.Lock()
@@ -102,16 +100,16 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def _fastembed_embed(text: str) -> list[float]:
+    global _fastembed_model
+    if _fastembed_model is None:
+        from fastembed import TextEmbedding
+        _fastembed_model = TextEmbedding(EMBEDDING_MODEL)
+    return next(iter(_fastembed_model.embed([text]))).tolist()
+
+
 async def _embed(text: str) -> list[float]:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            f"{EMBEDDING_BASE_URL}/embeddings",
-            json={"model": EMBEDDING_MODEL, "input": text},
-            headers={"Authorization": f"Bearer {EMBEDDING_API_KEY}"},
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["data"][0]["embedding"]
+    return await asyncio.to_thread(_fastembed_embed, text)
 
 
 async def save(name: str, type: str, description: str, content: str) -> dict:
@@ -172,7 +170,7 @@ async def start() -> None:
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     _conn = await asyncio.to_thread(sqlite3.connect, DB_PATH, check_same_thread=False)
     await asyncio.to_thread(_init_db, _conn)
-    logger.info("Memory store started (db=%s, embeddings=%s)", DB_PATH, EMBEDDING_BASE_URL)
+    logger.info("Memory store started (db=%s, embeddings=fastembed:%s)", DB_PATH, EMBEDDING_MODEL)
 
 
 async def stop() -> None:

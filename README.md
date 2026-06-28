@@ -28,9 +28,7 @@ A [FastMCP](https://github.com/jlowin/fastmcp) server that gives an MCP client b
 | `LENS_REDIRECT_URL` | _(unset)_ | If set, `GET /` and any non-MCP URL redirects (302) here. Returns 404 when unset. |
 | `LENS_DB_PATH` | `data/lens.db` | Path to the SQLite request log database. |
 | `LENS_MEMORY_DB_PATH` | `data/memory.db` | Path to the SQLite memory store database. |
-| `LENS_EMBEDDING_BASE_URL` | `http://localhost:1234/v1` | Base URL of an OpenAI-compatible `/embeddings` endpoint (LM Studio, Ollama, OpenAI, etc.). |
-| `LENS_EMBEDDING_API_KEY` | `lm-studio` | API key sent as a Bearer token to the embedding endpoint. |
-| `LENS_EMBEDDING_MODEL` | `text-embedding-nomic-embed-text-v1.5` | Embedding model name passed to the endpoint. |
+| `LENS_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | [fastembed](https://github.com/qdrant/fastembed) model used to embed memory entries locally (no external service needed). |
 
 ## Running locally
 
@@ -64,7 +62,7 @@ Every tool call is logged to a SQLite database (`data/lens.db` by default) via a
 
 ## Memory
 
-`memory_save`/`memory_search`/`memory_list`/`memory_delete` give an MCP client a persistent, semantically searchable memory store backed by SQLite (`data/memory.db` by default). Each entry has a unique `name`, a `type` (e.g. `user`, `preference`, `project`, `reference`), a short `description`, and full `content`; `memory_save` embeds `description + content` via an OpenAI-compatible `/embeddings` endpoint and stores the vector alongside the row. `memory_search` embeds the query and ranks entries by cosine similarity. Because this is a single shared server, any MCP client connected to it (Claude web, Claude Code, etc.) reads and writes the same memory.
+`memory_save`/`memory_search`/`memory_list`/`memory_delete` give an MCP client a persistent, semantically searchable memory store backed by SQLite (`data/memory.db` by default). Each entry has a unique `name`, a `type` (e.g. `user`, `preference`, `project`, `reference`), a short `description`, and full `content`; `memory_save` embeds `description + content` locally via fastembed and stores the vector alongside the row. `memory_search` embeds the query and ranks entries by cosine similarity. Because this is a single shared server, any MCP client connected to it (Claude web, Claude Code, etc.) reads and writes the same memory.
 
 ## Resilient navigation
 
